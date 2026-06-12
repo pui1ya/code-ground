@@ -1,0 +1,938 @@
+/**
+ * Editor.jsx — Code Ground main workspace
+ *
+ * This is the core product page. Everything Code Ground does happens here.
+ *
+ * ── Layout (100vh, no page scroll) ─────────────────────────────────
+ *
+ *   ┌─────────────────────────────────────────────────────┐
+ *   │  TopBar (48px)  logo | title | lang | presence | run │
+ *   ├────────────────────────────────────┬────────────────┤
+ *   │                                    │  AI Sidebar    │
+ *   │       Monaco Editor                │  (messages +   │
+ *   │       (flex: 1)                    │   input)       │
+ *   │                                    ├────────────────┤
+ *   │                                    │  Output Panel  │
+ *   │                                    │  (collapsible) │
+ *   └────────────────────────────────────┴────────────────┘
+ *
+ * ── Real-time sync architecture ─────────────────────────────────────
+ *
+ *   Yjs document  ←→  Socket.io  ←→  other users
+ *        ↕
+ *   MonacoBinding  ←→  Monaco editor
+ *        ↕
+ *   Awareness  →  cursor decorations + presence chips
+ *
+ * ── AI context flow ─────────────────────────────────────────────────
+ *
+ *   User types question in AI input
+ *     → POST /api/ai/ask  { question, code, language, editLog }
+ *     → Backend calls Anthropic API with full session context
+ *     → Response streams back via Server-Sent Events (SSE)
+ *     → Tokens appended to the last message in real time
+ *
+ * ── Code execution flow ─────────────────────────────────────────────
+ *
+ *   User clicks Run
+ *     → POST /api/execute  { code, language }
+ *     → Backend spawns isolated Docker container
+ *     → stdout / stderr returned in response
+ *     → Output panel shows result, elapsed time, exit code
+ *
+ * ── State owned here ────────────────────────────────────────────────
+ *
+ *   doc          — document metadata from GET /documents/:id
+ *   peers        — array of online users from Yjs awareness
+ *   aiMessages   — full chat history [{role, content, streaming}]
+ *   output       — last execution result {stdout, stderr, elapsed, success}
+ *   outputOpen   — whether the output panel is expanded
+ *   running      — true while POST /execute is in flight
+ *   aiLoading    — true while the AI SSE stream is open
+ *   connected    — Socket.io connection status
+ *   editLog      — ring buffer of last 50 edits for AI context
+ */
+
+import React, {
+  useState, useEffect, useRef, useCallback, useMemo,
+} from 'react';
+import { Link, useParams, useNavigate } from 'react-router-dom';
+import MonacoEditor                     from '@monaco-editor/react';
+import { useAuth }                      from '../hooks/useAuth.jsx';
+import api                              from '../utils/api.js';
+import styles                           from './Editor.module.css';
+
+/* ─────────────────────────────────────────────────────────────────────
+   CONSTANTS
+───────────────────────────────────────────────────────────────────── */
+
+const LANG_LABEL = {
+  javascript: 'JavaScript',
+  typescript: 'TypeScript',
+  python:     'Python',
+  java:       'Java',
+  cpp:        'C++',
+  go:         'Go',
+};
+
+const LANG_COLOR = {
+  javascript: '#F7DF1E',
+  typescript: '#3178C6',
+  python:     '#3572A5',
+  java:       '#B07219',
+  cpp:        '#F34B7D',
+  go:         '#00ADD8',
+};
+
+const AVATAR_COLORS = [
+  '#3B82F6','#22D3EE','#34D399','#F59E0B',
+  '#EC4899','#8B5CF6','#F87171','#60A5FA',
+];
+
+function avatarColor(name = '') {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+
+/* Max edits kept in memory for AI context */
+const MAX_EDIT_LOG = 50;
+
+/* ─────────────────────────────────────────────────────────────────────
+   ICONS
+───────────────────────────────────────────────────────────────────── */
+
+const PlayIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"
+    stroke="none" aria-hidden="true"><polygon points="5,3 19,12 5,21" /></svg>
+);
+
+const StopIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"
+    stroke="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" /></svg>
+);
+
+const SendIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden="true">
+    <line x1="22" y1="2" x2="11" y2="13" />
+    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+  </svg>
+);
+
+const ChevronDownIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+const ChevronUpIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <polyline points="18 15 12 9 6 15" />
+  </svg>
+);
+
+const CopyIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden="true">
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden="true">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+);
+
+const BackIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden="true">
+    <polyline points="15 18 9 12 15 6" />
+  </svg>
+);
+
+const BotIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="7" width="18" height="13" rx="2" />
+    <path d="M8 7V5a2 2 0 0 1 4 0v2" />
+    <path d="M16 7V5a2 2 0 0 0-4 0v2" />
+    <circle cx="9" cy="13" r="1" fill="currentColor" />
+    <circle cx="15" cy="13" r="1" fill="currentColor" />
+    <path d="M9 17h6" />
+  </svg>
+);
+
+const Spinner = ({ size = 14 }) => (
+  <svg className={styles.spinner} width={size} height={size}
+    viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+    aria-hidden="true">
+    <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+  </svg>
+);
+
+/* ─────────────────────────────────────────────────────────────────────
+   useYjs — custom hook
+   Handles all Yjs + Socket.io wiring so Editor stays clean.
+───────────────────────────────────────────────────────────────────── */
+function useYjs({ docId, user, onUpdate, onPeersChange, onConnectChange }) {
+  const ydocRef      = useRef(null);
+  const socketRef    = useRef(null);
+  const awarenessRef = useRef(null);
+  const bindingRef   = useRef(null);
+
+  useEffect(() => {
+    if (!docId || !user) return;
+    let cancelled = false;
+
+    async function init() {
+      /* Dynamic imports keep Yjs out of the initial bundle */
+      const [Y, socketIO, awarenessModule] = await Promise.all([
+        import('yjs'),
+        import('socket.io-client'),
+        import('y-protocols/awareness.js'),
+      ]);
+
+      if (cancelled) return;
+
+      const { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } = awarenessModule;
+
+      /* Yjs document and awareness */
+      const ydoc      = new Y.Doc();
+      const awareness = new Awareness(ydoc);
+      ydocRef.current      = ydoc;
+      awarenessRef.current = awareness;
+
+      /* Set our own presence data */
+      awareness.setLocalStateField('user', {
+        name:   user.username,
+        color:  avatarColor(user.username),
+        userId: user.id ?? user.username,
+      });
+
+      /* Socket.io connection */
+      const token  = localStorage.getItem('cg_token');
+      const socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
+      socketRef.current = socket;
+
+      socket.on('connect', () => {
+        if (cancelled) return;
+        onConnectChange?.(true);
+        socket.emit('join-document', { docId });
+      });
+
+      socket.on('disconnect', () => {
+        if (!cancelled) onConnectChange?.(false);
+      });
+
+      /* Apply state snapshot when we join */
+      socket.on('sync-step-1', ({ update }) => {
+        if (update) Y.applyUpdate(ydoc, new Uint8Array(update));
+      });
+
+      /* Apply remote edits from other users */
+      socket.on('sync-update', ({ update }) => {
+        Y.applyUpdate(ydoc, new Uint8Array(update), 'remote');
+      });
+
+      /* Relay remote awareness updates */
+      socket.on('awareness-update', ({ update }) => {
+        applyAwarenessUpdate(awareness, new Uint8Array(update), 'server');
+      });
+
+      socket.on('user-left', ({ userId }) => {
+        if (!cancelled) {
+          onPeersChange?.(prev =>
+            Array.isArray(prev) ? prev.filter(p => p.userId !== userId) : prev
+          );
+        }
+      });
+
+      /* Broadcast our own Yjs updates */
+      ydoc.on('update', (update, origin) => {
+        if (origin === 'remote') return;
+        socket.emit('sync-update', { docId, update: Array.from(update) });
+        if (onUpdate) onUpdate(ydoc.getText('content').toString());
+      });
+
+      /* Broadcast our awareness on every change */
+      awareness.on('change', () => {
+        const update = encodeAwarenessUpdate(awareness, Array.from(awareness.getStates().keys()));
+        socket.emit('awareness-update', { docId, update: Array.from(update) });
+
+        /* Rebuild peer list — exclude ourselves */
+        const peers = [];
+        awareness.getStates().forEach((state, clientId) => {
+          if (clientId !== awareness.clientID && state.user) peers.push(state.user);
+        });
+        if (!cancelled) onPeersChange?.(peers);
+      });
+    }
+
+    init().catch(err => console.warn('Yjs init error:', err));
+
+    return () => {
+      cancelled = true;
+      bindingRef.current?.destroy();
+      awarenessRef.current?.destroy();
+      socketRef.current?.disconnect();
+      ydocRef.current?.destroy();
+    };
+  }, [docId, user?.id]);
+
+  return { ydocRef, awarenessRef, bindingRef };
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   PRESENCE CHIPS
+───────────────────────────────────────────────────────────────────── */
+function PresenceChips({ peers, currentUser }) {
+  const all = [
+    { name: currentUser?.username, color: avatarColor(currentUser?.username ?? ''), self: true },
+    ...peers,
+  ].filter(p => p.name);
+
+  if (all.length === 0) return null;
+
+  return (
+    <div className={styles.presence} aria-label="People in this session">
+      {all.slice(0, 5).map((p, i) => (
+        <div
+          key={p.userId || i}
+          className={styles.presence_chip}
+          style={{ '--pc': p.color || '#3B82F6' }}
+          title={p.self ? `${p.name} (you)` : p.name}
+        >
+          <span className={styles.presence_initial} aria-hidden="true">
+            {p.name[0].toUpperCase()}
+          </span>
+          {i < 2 && (
+            <span className={styles.presence_name}>
+              {p.self ? 'You' : p.name}
+            </span>
+          )}
+        </div>
+      ))}
+      {all.length > 5 && (
+        <span className={styles.presence_overflow}>+{all.length - 5}</span>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   AI MESSAGE
+───────────────────────────────────────────────────────────────────── */
+function AIMessage({ msg }) {
+  const isUser = msg.role === 'user';
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(msg.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <div className={`${styles.msg} ${isUser ? styles.msg_user : styles.msg_ai}`}>
+
+      <div
+        className={styles.msg_avatar}
+        aria-hidden="true"
+        style={isUser ? { background: avatarColor(msg.username || 'u') } : {}}
+      >
+        {isUser
+          ? (msg.username?.[0]?.toUpperCase() ?? 'U')
+          : <span className={styles.ai_logo_mark}>&lt;CG/&gt;</span>
+        }
+      </div>
+
+      <div className={styles.msg_body}>
+        <span className={styles.msg_label}>
+          {isUser ? (msg.username || 'You') : 'Code Ground AI'}
+        </span>
+
+        <p className={styles.msg_content}>
+          {msg.content}
+          {msg.streaming && (
+            <span className={styles.stream_cursor} aria-hidden="true">▋</span>
+          )}
+        </p>
+
+        {!isUser && !msg.streaming && msg.content && (
+          <button className={styles.msg_copy} onClick={handleCopy} aria-label="Copy">
+            <CopyIcon />
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   AI SIDEBAR
+───────────────────────────────────────────────────────────────────── */
+function AISidebar({ messages, loading, onSend, onClear, contextNote }) {
+  const [input, setInput] = useState('');
+  const listRef           = useRef(null);
+  const inputRef          = useRef(null);
+
+  /* Scroll to bottom on new messages */
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  function handleSend() {
+    const q = input.trim();
+    if (!q || loading) return;
+    onSend(q);
+    setInput('');
+    inputRef.current?.focus();
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  }
+
+  /* Auto-grow textarea */
+  function handleInput(e) {
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+  }
+
+  return (
+    <aside className={styles.ai_sidebar} aria-label="AI pair programmer">
+
+      {/* Header */}
+      <div className={styles.ai_header}>
+        <div className={styles.ai_header_left}>
+          <BotIcon />
+          <span className={styles.ai_title}>AI Pair Programmer</span>
+          <span className={styles.ai_live_dot} aria-hidden="true" />
+        </div>
+        {messages.length > 0 && (
+          <button className={styles.ai_clear_btn} onClick={onClear}
+            aria-label="Clear chat" title="Clear chat">
+            <TrashIcon />
+          </button>
+        )}
+      </div>
+
+      {/* Context indicator */}
+      {contextNote && (
+        <div className={styles.ai_context_note}>
+          <span className={styles.context_dot} aria-hidden="true" />
+          {contextNote}
+        </div>
+      )}
+
+      {/* Message list */}
+      <div ref={listRef} className={styles.ai_messages}
+        role="log" aria-live="polite" aria-label="AI conversation">
+
+        {/* Empty state */}
+        {messages.length === 0 && (
+          <div className={styles.ai_empty}>
+            <div className={styles.ai_empty_logo} aria-hidden="true">&lt;CG/&gt;</div>
+            <p className={styles.ai_empty_heading}>Your AI pair programmer</p>
+            <p className={styles.ai_empty_sub}>
+              Ask anything about the code. The AI sees every edit made
+              by every user in this session.
+            </p>
+            <div className={styles.suggestions}>
+              {[
+                'Explain what this code does',
+                'Find bugs in this file',
+                'How can this be optimised?',
+                'Write tests for this function',
+              ].map(s => (
+                <button key={s} className={styles.suggestion_btn}
+                  onClick={() => { setInput(s); inputRef.current?.focus(); }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map(msg => <AIMessage key={msg.id} msg={msg} />)}
+
+        {/* Thinking dots — between user msg and AI reply */}
+        {loading && messages[messages.length - 1]?.role === 'user' && (
+          <div className={styles.ai_thinking}>
+            <div className={styles.ai_thinking_avatar} aria-hidden="true">&lt;CG/&gt;</div>
+            <div className={styles.thinking_dots} aria-label="AI thinking">
+              <span /><span /><span />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Input */}
+      <div className={styles.ai_input_wrap}>
+        <textarea
+          ref={inputRef}
+          className={styles.ai_input}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onInput={handleInput}
+          placeholder="Ask about the code… (Enter to send)"
+          rows={1}
+          disabled={loading}
+          aria-label="Message to AI"
+        />
+        <button
+          className={styles.ai_send_btn}
+          onClick={handleSend}
+          disabled={loading || !input.trim()}
+          aria-label="Send"
+        >
+          {loading ? <Spinner size={14} /> : <SendIcon />}
+        </button>
+      </div>
+
+    </aside>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   OUTPUT PANEL
+───────────────────────────────────────────────────────────────────── */
+function OutputPanel({ output, running, open, onToggle }) {
+  const bodyRef = useRef(null);
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [output]);
+
+  return (
+    <div className={`${styles.output_panel} ${open ? styles.output_open : ''}`}>
+
+      <button
+        className={styles.output_header}
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <div className={styles.output_header_left}>
+          <span
+            className={`${styles.output_status_dot} ${
+              running          ? styles.dot_running :
+              output?.success  ? styles.dot_ok :
+              output           ? styles.dot_err :
+                                 styles.dot_idle
+            }`}
+            aria-hidden="true"
+          />
+          <span className={styles.output_title}>Output</span>
+          {output && !running && (
+            <span className={`${styles.output_badge} ${output.success ? styles.badge_ok : styles.badge_err}`}>
+              {output.success ? '✓' : '✗'} {output.elapsed_ms}ms
+            </span>
+          )}
+          {running && (
+            <span className={styles.output_running_label}>
+              <Spinner size={11} /> running…
+            </span>
+          )}
+        </div>
+        <span aria-hidden="true">
+          {open ? <ChevronDownIcon /> : <ChevronUpIcon />}
+        </span>
+      </button>
+
+      {open && (
+        <div ref={bodyRef} className={styles.output_body}>
+          {!output && !running && (
+            <p className={styles.output_empty}>
+              <span className={styles.output_comment}>// press Run to execute</span>
+            </p>
+          )}
+          {output?.stdout && <pre className={styles.stdout}>{output.stdout}</pre>}
+          {output?.stderr && <pre className={styles.stderr}>{output.stderr}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   EDITOR — page root
+───────────────────────────────────────────────────────────────────── */
+export default function Editor() {
+  const { docId }  = useParams();
+  const { user }   = useAuth();
+  const navigate   = useNavigate();
+
+  const [doc,        setDoc]        = useState(null);
+  const [docLoading, setDocLoading] = useState(true);
+  const [docError,   setDocError]   = useState('');
+
+  const [peers,      setPeers]      = useState([]);
+  const [connected,  setConnected]  = useState(false);
+
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiLoading,  setAiLoading]  = useState(false);
+
+  const [output,     setOutput]     = useState(null);
+  const [running,    setRunning]    = useState(false);
+  const [outputOpen, setOutputOpen] = useState(true);
+
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleVal,     setTitleVal]     = useState('');
+
+  const editorRef  = useRef(null);
+  const monacoRef  = useRef(null);
+  const editLogRef = useRef([]);
+
+  /* Fetch document metadata */
+  useEffect(() => {
+    if (!docId) return;
+    api.get(`/documents/${docId}`)
+      .then(({ data }) => { setDoc(data); setTitleVal(data.title); })
+      .catch(err => setDocError(
+        err.response?.status === 404 ? 'Document not found.' : 'Failed to load document.'
+      ))
+      .finally(() => setDocLoading(false));
+  }, [docId]);
+
+  /* Track edits for AI context */
+  const handleEditorUpdate = useCallback((text) => {
+    editLogRef.current = [
+      ...editLogRef.current.slice(-(MAX_EDIT_LOG - 1)),
+      { username: user?.username ?? 'unknown', timestamp: new Date().toISOString(), preview: text.slice(0, 80) },
+    ];
+  }, [user?.username]);
+
+  /* Yjs + Socket.io */
+  const { ydocRef, awarenessRef, bindingRef } = useYjs({
+    docId,
+    user,
+    onUpdate:        handleEditorUpdate,
+    onPeersChange:   setPeers,
+    onConnectChange: setConnected,
+  });
+
+  /* Monaco mount */
+  const handleEditorMount = useCallback(async (editor, monaco) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+
+    /* Custom Code Ground theme */
+    monaco.editor.defineTheme('codeground', {
+      base: 'vs-dark', inherit: true,
+      rules: [
+        { token: 'comment',  foreground: '4B5563', fontStyle: 'italic' },
+        { token: 'keyword',  foreground: '93C5FD' },
+        { token: 'string',   foreground: '86EFAC' },
+        { token: 'number',   foreground: 'F9A8D4' },
+        { token: 'type',     foreground: '67E8F9' },
+        { token: 'function', foreground: 'FDE68A' },
+      ],
+      colors: {
+        'editor.background':                 '#080B14',
+        'editor.foreground':                 '#E2E8F0',
+        'editorLineNumber.foreground':       '#1E293B',
+        'editorLineNumber.activeForeground': '#475569',
+        'editor.lineHighlightBackground':    '#0D1117',
+        'editorCursor.foreground':           '#3B82F6',
+        'editor.selectionBackground':        '#1E3A5F',
+        'editorWidget.background':           '#0D1117',
+        'editorSuggestWidget.background':    '#0D1117',
+        'editorSuggestWidget.border':        '#1E293B',
+        'input.background':                  '#161B22',
+        'scrollbarSlider.background':        '#1E293B',
+        'editorGutter.background':           '#080B14',
+      },
+    });
+    monaco.editor.setTheme('codeground');
+
+    /* Bind Yjs to Monaco once both are ready */
+    if (ydocRef.current) {
+      try {
+        const { MonacoBinding } = await import('y-monaco');
+        const ytext = ydocRef.current.getText('content');
+        bindingRef.current = new MonacoBinding(
+          ytext,
+          editor.getModel(),
+          new Set([editor]),
+          awarenessRef.current ?? undefined,
+        );
+      } catch (e) {
+        console.warn('MonacoBinding unavailable:', e.message);
+      }
+    }
+  }, [ydocRef, awarenessRef, bindingRef]);
+
+  /* Save title on blur or Enter */
+  async function saveTitle() {
+    setEditingTitle(false);
+    const newTitle = titleVal.trim();
+    if (!newTitle || newTitle === doc?.title) return;
+    try {
+      const { data } = await api.patch(`/documents/${docId}`, { title: newTitle });
+      setDoc(d => ({ ...d, title: data.title }));
+    } catch { setTitleVal(doc?.title ?? ''); }
+  }
+
+  /* Run code in Docker sandbox */
+  async function handleRun() {
+    if (!editorRef.current || running) return;
+    const code = editorRef.current.getValue();
+    if (!code.trim()) return;
+
+    setRunning(true);
+    setOutput(null);
+    setOutputOpen(true);
+
+    try {
+      const { data } = await api.post('/execute', { code, language: doc?.language ?? 'javascript' });
+      setOutput(data);
+    } catch (err) {
+      setOutput({ stdout: '', stderr: err.response?.data?.error ?? 'Execution failed.', elapsed_ms: 0, success: false });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  /* Send message to AI pair programmer */
+  async function handleAISend(question) {
+    if (!question.trim() || aiLoading) return;
+
+    const code     = editorRef.current?.getValue() ?? '';
+    const language = doc?.language ?? 'javascript';
+
+    const userMsg = { id: Date.now(),     role: 'user',      content: question, username: user?.username };
+    const aiMsgId = Date.now() + 1;
+    const aiMsg   = { id: aiMsgId, role: 'assistant', content: '', streaming: true };
+
+    setAiMessages(prev => [...prev, userMsg, aiMsg]);
+    setAiLoading(true);
+
+    try {
+      const token    = localStorage.getItem('cg_token');
+      const response = await fetch('/api/ai/ask', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body:    JSON.stringify({
+          question, code, language,
+          editLog:    editLogRef.current.slice(-20),
+          peers:      peers.map(p => p.name),
+          lastOutput: output
+            ? { stdout: output.stdout?.slice(0, 500), stderr: output.stderr?.slice(0, 500) }
+            : null,
+        }),
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let   buffer  = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const chunk = line.slice(6);
+          if (chunk === '[DONE]') continue;
+          setAiMessages(prev => prev.map(m =>
+            m.id === aiMsgId ? { ...m, content: m.content + chunk } : m
+          ));
+        }
+      }
+
+    } catch {
+      setAiMessages(prev => prev.map(m =>
+        m.id === aiMsgId ? { ...m, content: 'Something went wrong. Please try again.', streaming: false } : m
+      ));
+    } finally {
+      setAiMessages(prev => prev.map(m =>
+        m.id === aiMsgId ? { ...m, streaming: false } : m
+      ));
+      setAiLoading(false);
+    }
+  }
+
+  const contextNote = useMemo(() => {
+    if (peers.length === 0) return 'Watching your edits';
+    if (peers.length === 1) return `Watching you and ${peers[0].name}`;
+    return `Watching ${peers.length + 1} people`;
+  }, [peers]);
+
+  /* Error page */
+  if (docError) {
+    return (
+      <div className={styles.error_root}>
+        <div className={styles.error_card}>
+          <span className={styles.error_icon} aria-hidden="true">&lt;404/&gt;</span>
+          <h1 className={styles.error_heading}>{docError}</h1>
+          <p className={styles.error_sub}>
+            The document may have been deleted or you may not have access.
+          </p>
+          <Link to="/dashboard" className={styles.error_back_btn}>← Back to dashboard</Link>
+        </div>
+      </div>
+    );
+  }
+
+  /* Main render */
+  return (
+    <div className={styles.root}>
+
+      {/* ── Top bar ── */}
+      <header className={styles.topbar}>
+
+        <div className={styles.topbar_left}>
+          <Link to="/dashboard" className={styles.back_btn} aria-label="Back to dashboard">
+            <BackIcon />
+          </Link>
+
+          <Link to="/" className={styles.topbar_logo} aria-label="Code Ground">
+            <span className={styles.logo_bracket}>&lt;</span>
+            <span className={styles.logo_letters}>CG</span>
+            <span className={styles.logo_bracket}>/&gt;</span>
+          </Link>
+
+          <span className={styles.topbar_sep} aria-hidden="true">/</span>
+
+          {/* Inline-editable title */}
+          {editingTitle ? (
+            <input
+              className={styles.title_input}
+              value={titleVal}
+              onChange={e => setTitleVal(e.target.value)}
+              onBlur={saveTitle}
+              onKeyDown={e => {
+                if (e.key === 'Enter')  saveTitle();
+                if (e.key === 'Escape') { setTitleVal(doc?.title ?? ''); setEditingTitle(false); }
+              }}
+              maxLength={80}
+              autoFocus
+              aria-label="Document title"
+            />
+          ) : (
+            <button
+              className={styles.title_btn}
+              onClick={() => setEditingTitle(true)}
+              title="Click to rename"
+              aria-label={`Title: ${doc?.title ?? '…'}. Click to rename.`}
+            >
+              {docLoading ? '…' : (doc?.title ?? 'Untitled')}
+            </button>
+          )}
+
+          {doc?.language && (
+            <span className={styles.lang_badge} style={{ '--lc': LANG_COLOR[doc.language] ?? '#64748B' }}>
+              <span className={styles.lang_badge_dot} aria-hidden="true" />
+              {LANG_LABEL[doc.language] ?? doc.language}
+            </span>
+          )}
+        </div>
+
+        <div className={styles.topbar_centre}>
+          <PresenceChips peers={peers} currentUser={user} />
+        </div>
+
+        <div className={styles.topbar_right}>
+          <div
+            className={`${styles.conn_dot} ${connected ? styles.conn_on : styles.conn_off}`}
+            title={connected ? 'Connected' : 'Disconnected'}
+            aria-label={connected ? 'Connected' : 'Disconnected'}
+          />
+
+          <button
+            className={`${styles.run_btn} ${running ? styles.run_btn_running : ''}`}
+            onClick={handleRun}
+            disabled={running || docLoading}
+            aria-busy={running}
+            aria-label={running ? 'Running…' : 'Run code'}
+          >
+            {running ? <><StopIcon /> Running…</> : <><PlayIcon /> Run</>}
+          </button>
+        </div>
+      </header>
+
+      {/* ── Body: editor + right panel ── */}
+      <div className={styles.body}>
+
+        {/* Monaco editor */}
+        <div className={styles.editor_wrap}>
+          <MonacoEditor
+            height="100%"
+            language={doc?.language ?? 'javascript'}
+            theme="codeground"
+            onMount={handleEditorMount}
+            loading={
+              <div className={styles.editor_loading}>
+                <Spinner size={20} />
+                <span>Loading editor…</span>
+              </div>
+            }
+            options={{
+              fontSize:                   14,
+              fontFamily:                 "'JetBrains Mono', monospace",
+              fontLigatures:              true,
+              lineHeight:                 1.8,
+              letterSpacing:              0.3,
+              minimap:                    { enabled: false },
+              scrollBeyondLastLine:        false,
+              smoothScrolling:             true,
+              cursorBlinking:              'phase',
+              cursorSmoothCaretAnimation: 'on',
+              padding:                    { top: 20, bottom: 20 },
+              wordWrap:                   'on',
+              tabSize:                    2,
+              renderLineHighlight:        'line',
+              bracketPairColorization:    { enabled: true },
+              formatOnPaste:              true,
+              suggestOnTriggerCharacters: true,
+              scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
+            }}
+          />
+        </div>
+
+        {/* Right panel */}
+        <div className={styles.right_panel}>
+          <AISidebar
+            messages={aiMessages}
+            loading={aiLoading}
+            onSend={handleAISend}
+            onClear={() => setAiMessages([])}
+            contextNote={contextNote}
+          />
+          <OutputPanel
+            output={output}
+            running={running}
+            open={outputOpen}
+            onToggle={() => setOutputOpen(o => !o)}
+          />
+        </div>
+
+      </div>
+    </div>
+  );
+}
