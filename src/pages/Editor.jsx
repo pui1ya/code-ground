@@ -61,6 +61,7 @@ import MonacoEditor                     from '@monaco-editor/react';
 import { useAuth }                      from '../hooks/useAuth.jsx';
 import api                              from '../utils/api.js';
 import styles                           from './Editor.module.css';
+import AISidebar from '../components/AISidebar.jsx';
 
 /* ─────────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -225,7 +226,14 @@ function useYjs({ docId, user, onUpdate, onPeersChange, onConnectChange }) {
 
       /* Socket.io connection */
       const token  = localStorage.getItem('cg_token');
-      const socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
+      // const socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
+      let socket;
+try {
+  socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
+} catch (e) {
+  console.warn('Socket.io connection skipped (no backend):', e.message);
+  return; // exit init gracefully
+}
       socketRef.current = socket;
 
       socket.on('connect', () => {
@@ -333,186 +341,7 @@ function PresenceChips({ peers, currentUser }) {
   );
 }
 
-/* ─────────────────────────────────────────────────────────────────────
-   AI MESSAGE
-───────────────────────────────────────────────────────────────────── */
-function AIMessage({ msg }) {
-  const isUser = msg.role === 'user';
-  const [copied, setCopied] = useState(false);
 
-  function handleCopy() {
-    navigator.clipboard.writeText(msg.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <div className={`${styles.msg} ${isUser ? styles.msg_user : styles.msg_ai}`}>
-
-      <div
-        className={styles.msg_avatar}
-        aria-hidden="true"
-        style={isUser ? { background: avatarColor(msg.username || 'u') } : {}}
-      >
-        {isUser
-          ? (msg.username?.[0]?.toUpperCase() ?? 'U')
-          : <span className={styles.ai_logo_mark}>&lt;CG/&gt;</span>
-        }
-      </div>
-
-      <div className={styles.msg_body}>
-        <span className={styles.msg_label}>
-          {isUser ? (msg.username || 'You') : 'Code Ground AI'}
-        </span>
-
-        <p className={styles.msg_content}>
-          {msg.content}
-          {msg.streaming && (
-            <span className={styles.stream_cursor} aria-hidden="true">▋</span>
-          )}
-        </p>
-
-        {!isUser && !msg.streaming && msg.content && (
-          <button className={styles.msg_copy} onClick={handleCopy} aria-label="Copy">
-            <CopyIcon />
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────────
-   AI SIDEBAR
-───────────────────────────────────────────────────────────────────── */
-function AISidebar({ messages, loading, onSend, onClear, contextNote }) {
-  const [input, setInput] = useState('');
-  const listRef           = useRef(null);
-  const inputRef          = useRef(null);
-
-  /* Scroll to bottom on new messages */
-  useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages]);
-
-  function handleSend() {
-    const q = input.trim();
-    if (!q || loading) return;
-    onSend(q);
-    setInput('');
-    inputRef.current?.focus();
-  }
-
-  function handleKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }
-
-  /* Auto-grow textarea */
-  function handleInput(e) {
-    e.target.style.height = 'auto';
-    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-  }
-
-  return (
-    <aside className={styles.ai_sidebar} aria-label="AI pair programmer">
-
-      {/* Header */}
-      <div className={styles.ai_header}>
-        <div className={styles.ai_header_left}>
-          <BotIcon />
-          <span className={styles.ai_title}>AI Pair Programmer</span>
-          <span className={styles.ai_live_dot} aria-hidden="true" />
-        </div>
-        {messages.length > 0 && (
-          <button className={styles.ai_clear_btn} onClick={onClear}
-            aria-label="Clear chat" title="Clear chat">
-            <TrashIcon />
-          </button>
-        )}
-      </div>
-
-      {/* Context indicator */}
-      {contextNote && (
-        <div className={styles.ai_context_note}>
-          <span className={styles.context_dot} aria-hidden="true" />
-          {contextNote}
-        </div>
-      )}
-
-      {/* Message list */}
-      <div ref={listRef} className={styles.ai_messages}
-        role="log" aria-live="polite" aria-label="AI conversation">
-
-        {/* Empty state */}
-        {messages.length === 0 && (
-          <div className={styles.ai_empty}>
-            <div className={styles.ai_empty_logo} aria-hidden="true">&lt;CG/&gt;</div>
-            <p className={styles.ai_empty_heading}>Your AI pair programmer</p>
-            <p className={styles.ai_empty_sub}>
-              Ask anything about the code. The AI sees every edit made
-              by every user in this session.
-            </p>
-            <div className={styles.suggestions}>
-              {[
-                'Explain what this code does',
-                'Find bugs in this file',
-                'How can this be optimised?',
-                'Write tests for this function',
-              ].map(s => (
-                <button key={s} className={styles.suggestion_btn}
-                  onClick={() => { setInput(s); inputRef.current?.focus(); }}>
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {messages.map(msg => <AIMessage key={msg.id} msg={msg} />)}
-
-        {/* Thinking dots — between user msg and AI reply */}
-        {loading && messages[messages.length - 1]?.role === 'user' && (
-          <div className={styles.ai_thinking}>
-            <div className={styles.ai_thinking_avatar} aria-hidden="true">&lt;CG/&gt;</div>
-            <div className={styles.thinking_dots} aria-label="AI thinking">
-              <span /><span /><span />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Input */}
-      <div className={styles.ai_input_wrap}>
-        <textarea
-          ref={inputRef}
-          className={styles.ai_input}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onInput={handleInput}
-          placeholder="Ask about the code… (Enter to send)"
-          rows={1}
-          disabled={loading}
-          aria-label="Message to AI"
-        />
-        <button
-          className={styles.ai_send_btn}
-          onClick={handleSend}
-          disabled={loading || !input.trim()}
-          aria-label="Send"
-        >
-          {loading ? <Spinner size={14} /> : <SendIcon />}
-        </button>
-      </div>
-
-    </aside>
-  );
-}
 
 /* ─────────────────────────────────────────────────────────────────────
    OUTPUT PANEL
@@ -923,6 +752,7 @@ export default function Editor() {
             onSend={handleAISend}
             onClear={() => setAiMessages([])}
             contextNote={contextNote}
+            currentUser={user}
           />
           <OutputPanel
             output={output}
