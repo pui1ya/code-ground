@@ -44,6 +44,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Editor    from './pages/Editor.jsx';
 import Pricing   from './pages/Pricing.jsx';
 import AISidebar from './components/AISidebar.jsx';
+import { useState, useEffect } from 'react';
 
 function PrivateRoute({ children }) {
   const { user } = useAuth();
@@ -93,3 +94,33 @@ export default function App() {
     />
   </div>
 } />
+
+
+function StreamTest() {
+  const [messages, setMessages] = useState([
+    { id: 1, role: 'user', content: 'Show me a fixed validateToken function', username: 'punyashree', timestamp: new Date().toISOString() },
+  ]);
+
+  useEffect(() => {
+    const full = "Here's the fix:\n\n```js\nfunction validateToken(token) {\n  return jwt.verify(token, process.env.JWT_SECRET);\n}\n```\n\nThis now expects a raw string.";
+    const id = 2;
+    setMessages(m => [...m, { id, role: 'assistant', content: '', streaming: true, timestamp: new Date().toISOString() }]);
+
+    let i = 0;
+    const interval = setInterval(() => {
+      i += 3;
+      setMessages(m => m.map(msg =>
+        msg.id === id ? { ...msg, content: full.slice(0, i), streaming: i < full.length } : msg
+      ));
+      if (i >= full.length) clearInterval(interval);
+    }, 40);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div style={{ height: '100vh', width: '320px', margin: '0 auto' }}>
+      <AISidebar messages={messages} loading={false} onSend={() => {}} onClear={() => {}} contextNote="Watching your edits" />
+    </div>
+  );
+}

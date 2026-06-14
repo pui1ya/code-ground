@@ -9,17 +9,17 @@
  *
  * ── What this component owns ─────────────────────────────────────────
  *
- *   - The full chat message list (renders all messages, scroll state)
+ *   - The full chat message list (scroll state, rendering each AIMessage)
  *   - The auto-growing textarea input
  *   - The "scroll to bottom" button (appears when user scrolls up)
  *   - The "thinking" animation between user message and AI reply
- *   - Message timestamps (relative: "just now", "2 min ago")
- *   - Code block rendering inside AI messages (fenced ``` blocks)
- *   - Copy-to-clipboard on completed AI messages
+ *   - The empty state with suggested prompts
  *
  * ── What this component does NOT own ────────────────────────────────
  *
  *   - The actual AI API call (Editor.jsx owns that — SSE streaming logic)
+ *   - Individual message rendering — delegated to AIMessage.jsx, which
+ *     handles parsing, code blocks, timestamps, and streaming cursors.
  *   - The message array (passed in as `messages` prop)
  *   - Auth state (receives `currentUser` as a prop)
  *
@@ -37,6 +37,7 @@
  *                               streaming: boolean (true while SSE is open),
  *                               timestamp: ISO string (optional),
  *                             }
+ *                             See AIMessage.jsx for how each message renders.
  *
  *   loading      {boolean}  — true while the AI SSE stream is open
  *                             Controls the thinking indicator visibility
@@ -50,7 +51,8 @@
  *                             "Watching you and Alice" or "Watching your edits"
  *                             Tells the user what the AI currently sees.
  *
- *   currentUser  {Object}   — { username: string } — used for avatar initials
+ *   currentUser  {Object}   — { username: string } — reserved for future use
+ *                             (e.g. showing "Ask as {username}")
  *
  * ── How to use in Editor.jsx ─────────────────────────────────────────
  *
@@ -65,94 +67,15 @@
  *     currentUser={user}
  *   />
  *
- *   Remove the inline AISidebar and AIMessage functions from Editor.jsx
- *   after adding this import.
+ *   Remove the inline AISidebar, AIMessage, and CodeBlock functions
+ *   from Editor.jsx after adding this import.
  */
 
 import React, {
-  useState, useEffect, useRef, useCallback, memo,
+  useState, useEffect, useRef, useCallback,
 } from 'react';
-import styles from './AISidebar.module.css';
-
-/* ─────────────────────────────────────────────────────────────────────
-   AVATAR COLOR — deterministic colour from username string.
-   Same algorithm used in Editor.jsx and Dashboard.jsx so the
-   same user always gets the same colour across the whole app.
-───────────────────────────────────────────────────────────────────── */
-const AVATAR_COLORS = [
-  '#3B82F6', '#22D3EE', '#34D399', '#F59E0B',
-  '#EC4899', '#8B5CF6', '#F87171', '#60A5FA',
-];
-
-function avatarColor(name = '') {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) {
-    h = name.charCodeAt(i) + ((h << 5) - h);
-  }
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
-
-/* ─────────────────────────────────────────────────────────────────────
-   RELATIVE TIME — formats a timestamp as a human-friendly string.
-   "just now" / "2 min ago" / "1 hr ago" / "Yesterday" / date string.
-   We roll our own to avoid pulling in date-fns for one function.
-───────────────────────────────────────────────────────────────────── */
-function relativeTime(isoStr) {
-  if (!isoStr) return '';
-  const diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
-  if (diff < 10)    return 'just now';
-  if (diff < 60)    return `${Math.floor(diff)}s ago`;
-  if (diff < 3600)  return `${Math.floor(diff / 60)} min ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`;
-  return new Date(isoStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-/* ─────────────────────────────────────────────────────────────────────
-   PARSE MESSAGE CONTENT
-   Splits an AI response string into segments of two types:
-     { type: 'text', content: string }
-     { type: 'code', lang: string, content: string }
-
-   Handles fenced code blocks: ```js\n...\n``` or ```\n...\n```
-   Everything outside a fenced block is a text segment.
-   This lets AIMessage render code in a styled <pre> block.
-───────────────────────────────────────────────────────────────────── */
-function parseContent(text) {
-  if (!text) return [{ type: 'text', content: '' }];
-
-  const segments = [];
-  /* Regex: matches ``` optionally followed by a language name, then content, then ``` */
-  const FENCE_RE = /```(\w*)\n?([\s\S]*?)```/g;
-  let lastIndex  = 0;
-  let match;
-
-  while ((match = FENCE_RE.exec(text)) !== null) {
-    /* Text before this code block */
-    if (match.index > lastIndex) {
-      segments.push({
-        type:    'text',
-        content: text.slice(lastIndex, match.index),
-      });
-    }
-    /* The code block itself */
-    segments.push({
-      type:    'code',
-      lang:    match[1] || 'code',
-      content: match[2].trim(),
-    });
-    lastIndex = match.index + match[0].length;
-  }
-
-  /* Remaining text after the last code block */
-  if (lastIndex < text.length) {
-    segments.push({
-      type:    'text',
-      content: text.slice(lastIndex),
-    });
-  }
-
-  return segments.length > 0 ? segments : [{ type: 'text', content: text }];
-}
+import AIMessage from './AIMessage.jsx';
+import styles    from './AISidebar.module.css';
 
 /* ─────────────────────────────────────────────────────────────────────
    ICONS — inline SVG, stroke-based, inherit currentColor.
@@ -192,15 +115,6 @@ const TrashIcon = () => (
   </svg>
 );
 
-const CopyIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-    strokeLinejoin="round" aria-hidden="true">
-    <rect x="9" y="9" width="13" height="13" rx="2" />
-    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-  </svg>
-);
-
 /* Chevron-down — used in the scroll-to-bottom button */
 const ChevronDownIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -218,145 +132,6 @@ const Spinner = () => (
     <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
   </svg>
 );
-
-/* ─────────────────────────────────────────────────────────────────────
-   CODE BLOCK — rendered inside an AI message when the response
-   contains a fenced ``` block. Shows the language label and a
-   copy button in the header.
-───────────────────────────────────────────────────────────────────── */
-function CodeBlock({ lang, content }) {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <div className={styles.code_block}>
-      {/* Code block header: language label + copy button */}
-      <div className={styles.code_block_header}>
-        <span className={styles.code_lang}>{lang}</span>
-        <button
-          className={styles.code_copy_btn}
-          onClick={handleCopy}
-          aria-label={`Copy ${lang} code`}
-        >
-          <CopyIcon />
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
-      </div>
-      {/* The actual code — pre preserves indentation */}
-      <pre className={styles.code_content}>
-        <code>{content}</code>
-      </pre>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────────
-   AI MESSAGE — a single message bubble.
-
-   Differences from the Editor.jsx inline version:
-     1. Renders code blocks via parseContent() instead of raw pre-wrap
-     2. Shows a relative timestamp below the message
-     3. memo() wraps it — messages don't re-render when input changes
-───────────────────────────────────────────────────────────────────── */
-const AIMessage = memo(function AIMessage({ msg }) {
-  const isUser   = msg.role === 'user';
-  const segments = isUser ? null : parseContent(msg.content);
-
-  /* Copy the entire message content */
-  const [copied, setCopied] = useState(false);
-  function handleCopyAll() {
-    navigator.clipboard.writeText(msg.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <div
-      className={`${styles.msg} ${isUser ? styles.msg_user : styles.msg_ai}`}
-      /* Each message is a listitem in the log region */
-    >
-      {/* ── Avatar ── */}
-      <div
-        className={styles.msg_avatar}
-        aria-hidden="true"
-        style={isUser ? { background: avatarColor(msg.username || 'u') } : {}}
-      >
-        {isUser
-          /* User: coloured initial */
-          ? (msg.username?.[0]?.toUpperCase() ?? 'U')
-          /* AI: the <CG/> logo mark */
-          : <span className={styles.ai_logo_mark}>&lt;CG/&gt;</span>
-        }
-      </div>
-
-      {/* ── Message body ── */}
-      <div className={styles.msg_body}>
-
-        {/* Label row: name + timestamp */}
-        <div className={styles.msg_meta}>
-          <span className={styles.msg_label}>
-            {isUser ? (msg.username || 'You') : 'Code Ground AI'}
-          </span>
-          {msg.timestamp && (
-            <time
-              className={styles.msg_time}
-              dateTime={msg.timestamp}
-              title={new Date(msg.timestamp).toLocaleString()}
-            >
-              {relativeTime(msg.timestamp)}
-            </time>
-          )}
-        </div>
-
-        {/* ── Content area ── */}
-        {isUser ? (
-          /* User messages: plain pre-wrap text */
-          <p className={styles.msg_content}>
-            {msg.content}
-          </p>
-        ) : (
-          /* AI messages: parsed segments — text + code blocks */
-          <div className={styles.msg_segments}>
-            {segments.map((seg, i) =>
-              seg.type === 'code' ? (
-                <CodeBlock key={i} lang={seg.lang} content={seg.content} />
-              ) : (
-                /* Text segment: pre-wrap preserves newlines from the AI */
-                <p key={i} className={styles.msg_content}>
-                  {seg.content}
-                  {/* Blinking cursor on the LAST segment of a streaming message */}
-                  {msg.streaming && i === segments.length - 1 && (
-                    <span className={styles.stream_cursor} aria-hidden="true">▋</span>
-                  )}
-                </p>
-              )
-            )}
-          </div>
-        )}
-
-        {/* ── Copy button — only on completed AI messages ── */}
-        {!isUser && !msg.streaming && msg.content && (
-          <button
-            className={styles.msg_copy}
-            onClick={handleCopyAll}
-            aria-label="Copy full response"
-          >
-            <CopyIcon />
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
-        )}
-
-      </div>
-    </div>
-  );
-});
 
 /* ─────────────────────────────────────────────────────────────────────
    THINKING INDICATOR — shown while waiting for the AI to start
