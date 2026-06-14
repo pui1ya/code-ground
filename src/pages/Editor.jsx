@@ -684,6 +684,7 @@ export default function Editor() {
 
         <div className={styles.topbar_centre}>
           <PresenceChips peers={peers} currentUser={user} />
+          <Presence currentUser={user} peers={peers} maxVisible={4} />
         </div>
 
         <div className={styles.topbar_right}>

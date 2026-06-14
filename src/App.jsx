@@ -45,6 +45,7 @@ import Editor    from './pages/Editor.jsx';
 import Pricing   from './pages/Pricing.jsx';
 import AISidebar from './components/AISidebar.jsx';
 import { useState, useEffect } from 'react';
+import Presence from './components/Presence.jsx';
 
 function PrivateRoute({ children }) {
   const { user } = useAuth();
@@ -121,6 +122,24 @@ function StreamTest() {
   return (
     <div style={{ height: '100vh', width: '320px', margin: '0 auto' }}>
       <AISidebar messages={messages} loading={false} onSend={() => {}} onClear={() => {}} contextNote="Watching your edits" />
+    </div>
+  );
+}
+
+function PresenceTest() {
+  return (
+    <div style={{ padding: 40, background: '#080B14', height: '100vh' }}>
+      <Presence
+        currentUser={{ username: 'punyashree' }}
+        peers={[
+          { userId: '1', name: 'Alice', active: true },
+          { userId: '2', name: 'Bob' },
+          { userId: '3', name: 'Charlie' },
+          { userId: '4', name: 'Diana' },
+          { userId: '5', name: 'Evan' },
+        ]}
+        maxVisible={4}
+      />
     </div>
   );
 }
