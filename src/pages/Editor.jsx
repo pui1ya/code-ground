@@ -62,6 +62,7 @@ import { useAuth }                      from '../hooks/useAuth.jsx';
 import api                              from '../utils/api.js';
 import styles                           from './Editor.module.css';
 import AISidebar from '../components/AISidebar.jsx';
+import Presence  from '../components/Presence.jsx';
 
 /* ─────────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -683,7 +684,6 @@ export default function Editor() {
         </div>
 
         <div className={styles.topbar_centre}>
-          <PresenceChips peers={peers} currentUser={user} />
           <Presence currentUser={user} peers={peers} maxVisible={4} />
         </div>
 
