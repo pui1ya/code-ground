@@ -147,14 +147,15 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useState, useEffect }     from 'react';
 import { AuthProvider, useAuth }   from './hooks/useAuth.jsx';
-import Landing   from './pages/Landing.jsx';
-import Login     from './pages/Login.jsx';
-import Register  from './pages/Register.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import Editor    from './pages/Editor.jsx';
-import Pricing   from './pages/Pricing.jsx';
-import AISidebar from './components/AISidebar.jsx';
-import Presence  from './components/Presence.jsx';
+import Landing     from './pages/Landing.jsx';
+import Login       from './pages/Login.jsx';
+import Register    from './pages/Register.jsx';
+import Dashboard   from './pages/Dashboard.jsx';
+import Editor      from './pages/Editor.jsx';
+import Pricing     from './pages/Pricing.jsx';
+import AISidebar   from './components/AISidebar.jsx';
+import Presence    from './components/Presence.jsx';
+import OutputPanel from './components/OutputPanel.jsx';
 
 function PrivateRoute({ children }) {
   const { user } = useAuth();
@@ -230,6 +231,28 @@ function PresenceTest() {
   );
 }
 
+function OutputTest() {
+  const [open, setOpen] = useState(true);
+  const [output, setOutput] = useState({
+    stdout: 'Building...\nCompiled successfully.\nServer running on port 4000',
+    stderr: 'Warning: deprecated API used on line 12',
+    elapsed_ms: 842,
+    success: true,
+  });
+
+  return (
+    <div style={{ width: 400, margin: '40px auto' }}>
+      <OutputPanel
+        output={output}
+        running={false}
+        open={open}
+        onToggle={() => setOpen(o => !o)}
+        onClear={() => setOutput(null)}
+      />
+    </div>
+  );
+}
+
 /* ───────────────────────────────────────────
    ROUTES
 ─────────────────────────────────────────── */
@@ -248,10 +271,11 @@ function AppRoutes() {
         <PrivateRoute><Editor /></PrivateRoute>
       } />
 
-      {/* Dev-only — delete these three before deploying */}
+      {/* Dev-only — delete these four before deploying */}
       <Route path="/test-ai"       element={<AITest />} />
       <Route path="/stream-test"   element={<StreamTest />} />
       <Route path="/presence-test" element={<PresenceTest />} />
+      <Route path="/output-test"   element={<OutputTest />} />
     </Routes>
   );
 }

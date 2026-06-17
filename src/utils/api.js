@@ -123,6 +123,13 @@ const MOCK_DOC = {
   is_public: false,
 };
 
+/* In-memory mock snapshot store — lets newly-saved snapshots
+   actually appear in the list without a real backend. */
+let MOCK_SNAPSHOTS = [
+  { id: 'snap-1', label: 'Initial setup',         created_by_name: 'punyashree', created_at: new Date(Date.now() - 7200000).toISOString() },
+  { id: 'snap-2', label: 'Added error handling',  created_by_name: 'punyashree', created_at: new Date(Date.now() - 1800000).toISOString() },
+];
+
 // Simulates network delay so you see loading states
 function delay(ms = 600) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -131,13 +138,19 @@ function delay(ms = 600) {
 const api = {
   get: async (url) => {
     await delay();
+
+    /* IMPORTANT: more specific checks must come BEFORE
+       more general ones — /snapshots before /documents/ */
     if (url === '/documents')          return { data: MOCK_DOCS };
+    if (url.endsWith('/snapshots'))    return { data: MOCK_SNAPSHOTS };
     if (url.startsWith('/documents/')) return { data: MOCK_DOC };
+
     return { data: {} };
   },
 
   post: async (url, body) => {
     await delay(400);
+
     if (url === '/documents') {
       const newDoc = {
         id: 'doc-' + Date.now(),
@@ -152,6 +165,7 @@ const api = {
       };
       return { data: newDoc };
     }
+
     if (url === '/execute') {
       return {
         data: {
@@ -162,10 +176,26 @@ const api = {
         },
       };
     }
-    // AI ask — return a fake streamed response
+
+    if (url.endsWith('/snapshots')) {
+      const newSnapshot = {
+        id: 'snap-' + Date.now(),
+        label: body.label,
+        created_by_name: 'punyashree',
+        created_at: new Date().toISOString(),
+        content: body.content,
+        language: body.language,
+      };
+      /* Persist into the in-memory store so a subsequent GET
+         (e.g. reopening the drawer) still shows it. */
+      MOCK_SNAPSHOTS = [newSnapshot, ...MOCK_SNAPSHOTS];
+      return { data: newSnapshot };
+    }
+
     if (url === '/api/ai/ask') {
       return { data: { message: 'Mock AI response' } };
     }
+
     return { data: {} };
   },
 
@@ -174,8 +204,14 @@ const api = {
     return { data: { ...MOCK_DOC, ...body } };
   },
 
-  delete: async () => {
+  delete: async (url) => {
     await delay(300);
+    /* Handle snapshot deletion in the mock store too */
+    const match = url.match(/\/snapshots\/(.+)$/);
+    if (match) {
+      const id = match[1];
+      MOCK_SNAPSHOTS = MOCK_SNAPSHOTS.filter(s => s.id !== id);
+    }
     return { data: { success: true } };
   },
 };

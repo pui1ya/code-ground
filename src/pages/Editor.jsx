@@ -63,6 +63,8 @@ import api                              from '../utils/api.js';
 import styles                           from './Editor.module.css';
 import AISidebar from '../components/AISidebar.jsx';
 import Presence  from '../components/Presence.jsx';
+import OutputPanel from '../components/OutputPanel.jsx';
+import SnapshotDrawer from '../components/SnapshotDrawer.jsx';
 
 /* ─────────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -343,67 +345,6 @@ function PresenceChips({ peers, currentUser }) {
 }
 
 
-
-/* ─────────────────────────────────────────────────────────────────────
-   OUTPUT PANEL
-───────────────────────────────────────────────────────────────────── */
-function OutputPanel({ output, running, open, onToggle }) {
-  const bodyRef = useRef(null);
-
-  useEffect(() => {
-    if (bodyRef.current) bodyRef.current.scrollTop = 0;
-  }, [output]);
-
-  return (
-    <div className={`${styles.output_panel} ${open ? styles.output_open : ''}`}>
-
-      <button
-        className={styles.output_header}
-        onClick={onToggle}
-        aria-expanded={open}
-      >
-        <div className={styles.output_header_left}>
-          <span
-            className={`${styles.output_status_dot} ${
-              running          ? styles.dot_running :
-              output?.success  ? styles.dot_ok :
-              output           ? styles.dot_err :
-                                 styles.dot_idle
-            }`}
-            aria-hidden="true"
-          />
-          <span className={styles.output_title}>Output</span>
-          {output && !running && (
-            <span className={`${styles.output_badge} ${output.success ? styles.badge_ok : styles.badge_err}`}>
-              {output.success ? '✓' : '✗'} {output.elapsed_ms}ms
-            </span>
-          )}
-          {running && (
-            <span className={styles.output_running_label}>
-              <Spinner size={11} /> running…
-            </span>
-          )}
-        </div>
-        <span aria-hidden="true">
-          {open ? <ChevronDownIcon /> : <ChevronUpIcon />}
-        </span>
-      </button>
-
-      {open && (
-        <div ref={bodyRef} className={styles.output_body}>
-          {!output && !running && (
-            <p className={styles.output_empty}>
-              <span className={styles.output_comment}>// press Run to execute</span>
-            </p>
-          )}
-          {output?.stdout && <pre className={styles.stdout}>{output.stdout}</pre>}
-          {output?.stderr && <pre className={styles.stderr}>{output.stderr}</pre>}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ─────────────────────────────────────────────────────────────────────
    EDITOR — page root
 ───────────────────────────────────────────────────────────────────── */
@@ -419,6 +360,14 @@ export default function Editor() {
   const [peers,      setPeers]      = useState([]);
   const [connected,  setConnected]  = useState(false);
 
+  useEffect(() => {
+  setPeers([
+    { userId: '1', name: 'Alice',   active: true },
+    { userId: '2', name: 'Bob' },
+    { userId: '3', name: 'Charlie' },
+  ]);
+}, []);
+
   const [aiMessages, setAiMessages] = useState([]);
   const [aiLoading,  setAiLoading]  = useState(false);
 
@@ -432,6 +381,12 @@ export default function Editor() {
   const editorRef  = useRef(null);
   const monacoRef  = useRef(null);
   const editLogRef = useRef([]);
+
+  const [showSnapshots, setShowSnapshots]       = useState(false);
+  const [snapshots, setSnapshots]               = useState([]);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false);
+  const [savingSnapshot, setSavingSnapshot]     = useState(false);
+  const [restoringId, setRestoringId]           = useState(null);
 
   /* Fetch document metadata */
   useEffect(() => {
@@ -540,6 +495,44 @@ export default function Editor() {
       setOutput({ stdout: '', stderr: err.response?.data?.error ?? 'Execution failed.', elapsed_ms: 0, success: false });
     } finally {
       setRunning(false);
+    }
+  }
+
+    async function loadSnapshots() {
+    setSnapshotsLoading(true);
+    try {
+      const { data } = await api.get(`/documents/${docId}/snapshots`);
+      setSnapshots(data);
+    } finally {
+      setSnapshotsLoading(false);
+    }
+  }
+
+  async function handleSaveSnapshot(label) {
+    setSavingSnapshot(true);
+    try {
+      const { data } = await api.post(`/documents/${docId}/snapshots`, {
+        label,
+        content: editorRef.current.getValue(),
+        language: doc?.language,
+      });
+      setSnapshots(prev => [data, ...prev]);
+    } finally {
+      setSavingSnapshot(false);
+    }
+  }
+
+  async function handleRestoreSnapshot(snapshot) {
+    setRestoringId(snapshot.id);
+    try {
+      const ytext = ydocRef.current.getText('content');
+      ydocRef.current.transact(() => {
+        ytext.delete(0, ytext.length);
+        ytext.insert(0, snapshot.content);
+      });
+    } finally {
+      setRestoringId(null);
+      setShowSnapshots(false);
     }
   }
 
@@ -694,21 +687,40 @@ export default function Editor() {
             aria-label={connected ? 'Connected' : 'Disconnected'}
           />
 
-          <button
-            className={`${styles.run_btn} ${running ? styles.run_btn_running : ''}`}
-            onClick={handleRun}
-            disabled={running || docLoading}
-            aria-busy={running}
-            aria-label={running ? 'Running…' : 'Run code'}
-          >
-            {running ? <><StopIcon /> Running…</> : <><PlayIcon /> Run</>}
-          </button>
+            {/* ADD THIS — snapshots trigger, before the run button */}
+  <button
+    className={styles.run_btn}
+    onClick={() => { setShowSnapshots(true); loadSnapshots(); }}
+    aria-label="Open snapshots panel"
+  >
+    📸 Snapshots
+  </button>
+
+  <button
+    className={`${styles.run_btn} ${running ? styles.run_btn_running : ''}`}
+    onClick={handleRun}
+    disabled={running || docLoading}
+    aria-busy={running}
+    aria-label={running ? 'Running…' : 'Run code'}
+  >
+    {running ? <><StopIcon /> Running…</> : <><PlayIcon /> Run</>}
+  </button>
+
         </div>
       </header>
 
       {/* ── Body: editor + right panel ── */}
       <div className={styles.body}>
-
+<SnapshotDrawer
+      open={showSnapshots}
+      onClose={() => setShowSnapshots(false)}
+      snapshots={snapshots}
+      loadingList={snapshotsLoading}
+      onSave={handleSaveSnapshot}
+      saving={savingSnapshot}
+      onRestore={handleRestoreSnapshot}
+      restoringId={restoringId}
+    />
         {/* Monaco editor */}
         <div className={styles.editor_wrap}>
           <MonacoEditor
@@ -756,11 +768,12 @@ export default function Editor() {
             currentUser={user}
           />
           <OutputPanel
-            output={output}
-            running={running}
-            open={outputOpen}
-            onToggle={() => setOutputOpen(o => !o)}
-          />
+  output={output}
+  running={running}
+  open={outputOpen}
+  onToggle={() => setOutputOpen(o => !o)}
+  onClear={() => setOutput(null)}
+/>
         </div>
 
       </div>
