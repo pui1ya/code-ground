@@ -68,6 +68,7 @@ import SnapshotDrawer from '../components/SnapshotDrawer.jsx';
 import Navbar from '../components/Navbar.jsx';
 import { useYjs } from '../hooks/useYjs.js';
 import { useAI } from '../hooks/useAI.js';
+import { useExecution } from '../hooks/useExecution.js';
 
 /* ─────────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -191,161 +192,6 @@ const Spinner = ({ size = 14 }) => (
   </svg>
 );
 
-/* ─────────────────────────────────────────────────────────────────────
-   useYjs — custom hook
-   Handles all Yjs + Socket.io wiring so Editor stays clean.
-───────────────────────────────────────────────────────────────────── */
-// function useYjs({ docId, user, onUpdate, onPeersChange, onConnectChange }) {
-//   const ydocRef      = useRef(null);
-//   const socketRef    = useRef(null);
-//   const awarenessRef = useRef(null);
-//   const bindingRef   = useRef(null);
-
-//   useEffect(() => {
-//     if (!docId || !user) return;
-//     let cancelled = false;
-
-//     async function init() {
-//       /* Dynamic imports keep Yjs out of the initial bundle */
-//       const [Y, socketIO, awarenessModule] = await Promise.all([
-//         import('yjs'),
-//         import('socket.io-client'),
-//         import('y-protocols/awareness.js'),
-//       ]);
-
-//       if (cancelled) return;
-
-//       const { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } = awarenessModule;
-
-//       /* Yjs document and awareness */
-//       const ydoc      = new Y.Doc();
-//       const awareness = new Awareness(ydoc);
-//       ydocRef.current      = ydoc;
-//       awarenessRef.current = awareness;
-
-//       /* Set our own presence data */
-//       awareness.setLocalStateField('user', {
-//         name:   user.username,
-//         color:  avatarColor(user.username),
-//         userId: user.id ?? user.username,
-//       });
-
-//       /* Socket.io connection */
-//       const token  = localStorage.getItem('cg_token');
-//       // const socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
-//       let socket;
-// try {
-//   socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
-// } catch (e) {
-//   console.warn('Socket.io connection skipped (no backend):', e.message);
-//   return; // exit init gracefully
-// }
-//       socketRef.current = socket;
-
-//       socket.on('connect', () => {
-//         if (cancelled) return;
-//         onConnectChange?.(true);
-//         socket.emit('join-document', { docId });
-//       });
-
-//       socket.on('disconnect', () => {
-//         if (!cancelled) onConnectChange?.(false);
-//       });
-
-//       /* Apply state snapshot when we join */
-//       socket.on('sync-step-1', ({ update }) => {
-//         if (update) Y.applyUpdate(ydoc, new Uint8Array(update));
-//       });
-
-//       /* Apply remote edits from other users */
-//       socket.on('sync-update', ({ update }) => {
-//         Y.applyUpdate(ydoc, new Uint8Array(update), 'remote');
-//       });
-
-//       /* Relay remote awareness updates */
-//       socket.on('awareness-update', ({ update }) => {
-//         applyAwarenessUpdate(awareness, new Uint8Array(update), 'server');
-//       });
-
-//       socket.on('user-left', ({ userId }) => {
-//         if (!cancelled) {
-//           onPeersChange?.(prev =>
-//             Array.isArray(prev) ? prev.filter(p => p.userId !== userId) : prev
-//           );
-//         }
-//       });
-
-//       /* Broadcast our own Yjs updates */
-//       ydoc.on('update', (update, origin) => {
-//         if (origin === 'remote') return;
-//         socket.emit('sync-update', { docId, update: Array.from(update) });
-//         if (onUpdate) onUpdate(ydoc.getText('content').toString());
-//       });
-
-//       /* Broadcast our awareness on every change */
-//       awareness.on('change', () => {
-//         const update = encodeAwarenessUpdate(awareness, Array.from(awareness.getStates().keys()));
-//         socket.emit('awareness-update', { docId, update: Array.from(update) });
-
-//         /* Rebuild peer list — exclude ourselves */
-//         const peers = [];
-//         awareness.getStates().forEach((state, clientId) => {
-//           if (clientId !== awareness.clientID && state.user) peers.push(state.user);
-//         });
-//         if (!cancelled) onPeersChange?.(peers);
-//       });
-//     }
-
-//     init().catch(err => console.warn('Yjs init error:', err));
-
-//     return () => {
-//       cancelled = true;
-//       bindingRef.current?.destroy();
-//       awarenessRef.current?.destroy();
-//       socketRef.current?.disconnect();
-//       ydocRef.current?.destroy();
-//     };
-//   }, [docId, user?.id]);
-
-//   return { ydocRef, awarenessRef, bindingRef };
-// }
-
-/* ─────────────────────────────────────────────────────────────────────
-   PRESENCE CHIPS
-───────────────────────────────────────────────────────────────────── */
-// function PresenceChips({ peers, currentUser }) {
-//   const all = [
-//     { name: currentUser?.username, color: avatarColor(currentUser?.username ?? ''), self: true },
-//     ...peers,
-//   ].filter(p => p.name);
-
-//   if (all.length === 0) return null;
-
-//   return (
-//     <div className={styles.presence} aria-label="People in this session">
-//       {all.slice(0, 5).map((p, i) => (
-//         <div
-//           key={p.userId || i}
-//           className={styles.presence_chip}
-//           style={{ '--pc': p.color || '#3B82F6' }}
-//           title={p.self ? `${p.name} (you)` : p.name}
-//         >
-//           <span className={styles.presence_initial} aria-hidden="true">
-//             {p.name[0].toUpperCase()}
-//           </span>
-//           {i < 2 && (
-//             <span className={styles.presence_name}>
-//               {p.self ? 'You' : p.name}
-//             </span>
-//           )}
-//         </div>
-//       ))}
-//       {all.length > 5 && (
-//         <span className={styles.presence_overflow}>+{all.length - 5}</span>
-//       )}
-//     </div>
-//   );
-// }
 
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -370,12 +216,10 @@ export default function Editor() {
   ]);
 }, []);
 
-  // const [aiMessages, setAiMessages] = useState([]);
-  // const [aiLoading,  setAiLoading]  = useState(false);
 
-  const [output,     setOutput]     = useState(null);
-  const [running,    setRunning]    = useState(false);
-  const [outputOpen, setOutputOpen] = useState(true);
+  // const [output,     setOutput]     = useState(null);
+  // const [running,    setRunning]    = useState(false);
+  // const [outputOpen, setOutputOpen] = useState(true);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleVal,     setTitleVal]     = useState('');
@@ -419,6 +263,8 @@ const { ydocRef, awarenessRef, bindingRef, connected, getText, replaceText } = u
 
 const { messages: aiMessages, loading: aiLoading, send: sendAI,
         clearHistory: clearAIHistory, contextNote } = useAI({ peers });
+
+  const { output, running, outputOpen, setOutputOpen, run, cancel, clearOutput } = useExecution();
   /* Monaco mount */
   const handleEditorMount = useCallback(async (editor, monaco) => {
     editorRef.current = editor;
@@ -482,24 +328,28 @@ const { messages: aiMessages, loading: aiLoading, send: sendAI,
   }
 
   /* Run code in Docker sandbox */
-  async function handleRun() {
-    if (!editorRef.current || running) return;
-    const code = editorRef.current.getValue();
-    if (!code.trim()) return;
+  // async function handleRun() {
+  //   if (!editorRef.current || running) return;
+  //   const code = editorRef.current.getValue();
+  //   if (!code.trim()) return;
 
-    setRunning(true);
-    setOutput(null);
-    setOutputOpen(true);
+  //   setRunning(true);
+  //   setOutput(null);
+  //   setOutputOpen(true);
 
-    try {
-      const { data } = await api.post('/execute', { code, language: doc?.language ?? 'javascript' });
-      setOutput(data);
-    } catch (err) {
-      setOutput({ stdout: '', stderr: err.response?.data?.error ?? 'Execution failed.', elapsed_ms: 0, success: false });
-    } finally {
-      setRunning(false);
-    }
-  }
+  //   try {
+  //     const { data } = await api.post('/execute', { code, language: doc?.language ?? 'javascript' });
+  //     setOutput(data);
+  //   } catch (err) {
+  //     setOutput({ stdout: '', stderr: err.response?.data?.error ?? 'Execution failed.', elapsed_ms: 0, success: false });
+  //   } finally {
+  //     setRunning(false);
+  //   }
+  // }
+
+  function handleRun() {
+  run(editorRef.current?.getValue() ?? '', doc?.language ?? 'javascript');
+}
 
     async function loadSnapshots() {
     setSnapshotsLoading(true);
@@ -711,7 +561,7 @@ function handleAISend(question) {
           running={running}
           open={outputOpen}
           onToggle={() => setOutputOpen(o => !o)}
-          onClear={() => setOutput(null)}
+          onClear={clearOutput}
         />
       </div>
 
