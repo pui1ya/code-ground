@@ -65,6 +65,9 @@ import AISidebar from '../components/AISidebar.jsx';
 import Presence  from '../components/Presence.jsx';
 import OutputPanel from '../components/OutputPanel.jsx';
 import SnapshotDrawer from '../components/SnapshotDrawer.jsx';
+import Navbar from '../components/Navbar.jsx';
+import { useYjs } from '../hooks/useYjs.js';
+import { useAI } from '../hooks/useAI.js';
 
 /* ─────────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -192,157 +195,157 @@ const Spinner = ({ size = 14 }) => (
    useYjs — custom hook
    Handles all Yjs + Socket.io wiring so Editor stays clean.
 ───────────────────────────────────────────────────────────────────── */
-function useYjs({ docId, user, onUpdate, onPeersChange, onConnectChange }) {
-  const ydocRef      = useRef(null);
-  const socketRef    = useRef(null);
-  const awarenessRef = useRef(null);
-  const bindingRef   = useRef(null);
+// function useYjs({ docId, user, onUpdate, onPeersChange, onConnectChange }) {
+//   const ydocRef      = useRef(null);
+//   const socketRef    = useRef(null);
+//   const awarenessRef = useRef(null);
+//   const bindingRef   = useRef(null);
 
-  useEffect(() => {
-    if (!docId || !user) return;
-    let cancelled = false;
+//   useEffect(() => {
+//     if (!docId || !user) return;
+//     let cancelled = false;
 
-    async function init() {
-      /* Dynamic imports keep Yjs out of the initial bundle */
-      const [Y, socketIO, awarenessModule] = await Promise.all([
-        import('yjs'),
-        import('socket.io-client'),
-        import('y-protocols/awareness.js'),
-      ]);
+//     async function init() {
+//       /* Dynamic imports keep Yjs out of the initial bundle */
+//       const [Y, socketIO, awarenessModule] = await Promise.all([
+//         import('yjs'),
+//         import('socket.io-client'),
+//         import('y-protocols/awareness.js'),
+//       ]);
 
-      if (cancelled) return;
+//       if (cancelled) return;
 
-      const { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } = awarenessModule;
+//       const { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } = awarenessModule;
 
-      /* Yjs document and awareness */
-      const ydoc      = new Y.Doc();
-      const awareness = new Awareness(ydoc);
-      ydocRef.current      = ydoc;
-      awarenessRef.current = awareness;
+//       /* Yjs document and awareness */
+//       const ydoc      = new Y.Doc();
+//       const awareness = new Awareness(ydoc);
+//       ydocRef.current      = ydoc;
+//       awarenessRef.current = awareness;
 
-      /* Set our own presence data */
-      awareness.setLocalStateField('user', {
-        name:   user.username,
-        color:  avatarColor(user.username),
-        userId: user.id ?? user.username,
-      });
+//       /* Set our own presence data */
+//       awareness.setLocalStateField('user', {
+//         name:   user.username,
+//         color:  avatarColor(user.username),
+//         userId: user.id ?? user.username,
+//       });
 
-      /* Socket.io connection */
-      const token  = localStorage.getItem('cg_token');
-      // const socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
-      let socket;
-try {
-  socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
-} catch (e) {
-  console.warn('Socket.io connection skipped (no backend):', e.message);
-  return; // exit init gracefully
-}
-      socketRef.current = socket;
+//       /* Socket.io connection */
+//       const token  = localStorage.getItem('cg_token');
+//       // const socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
+//       let socket;
+// try {
+//   socket = socketIO.io('/', { auth: { token }, transports: ['websocket'] });
+// } catch (e) {
+//   console.warn('Socket.io connection skipped (no backend):', e.message);
+//   return; // exit init gracefully
+// }
+//       socketRef.current = socket;
 
-      socket.on('connect', () => {
-        if (cancelled) return;
-        onConnectChange?.(true);
-        socket.emit('join-document', { docId });
-      });
+//       socket.on('connect', () => {
+//         if (cancelled) return;
+//         onConnectChange?.(true);
+//         socket.emit('join-document', { docId });
+//       });
 
-      socket.on('disconnect', () => {
-        if (!cancelled) onConnectChange?.(false);
-      });
+//       socket.on('disconnect', () => {
+//         if (!cancelled) onConnectChange?.(false);
+//       });
 
-      /* Apply state snapshot when we join */
-      socket.on('sync-step-1', ({ update }) => {
-        if (update) Y.applyUpdate(ydoc, new Uint8Array(update));
-      });
+//       /* Apply state snapshot when we join */
+//       socket.on('sync-step-1', ({ update }) => {
+//         if (update) Y.applyUpdate(ydoc, new Uint8Array(update));
+//       });
 
-      /* Apply remote edits from other users */
-      socket.on('sync-update', ({ update }) => {
-        Y.applyUpdate(ydoc, new Uint8Array(update), 'remote');
-      });
+//       /* Apply remote edits from other users */
+//       socket.on('sync-update', ({ update }) => {
+//         Y.applyUpdate(ydoc, new Uint8Array(update), 'remote');
+//       });
 
-      /* Relay remote awareness updates */
-      socket.on('awareness-update', ({ update }) => {
-        applyAwarenessUpdate(awareness, new Uint8Array(update), 'server');
-      });
+//       /* Relay remote awareness updates */
+//       socket.on('awareness-update', ({ update }) => {
+//         applyAwarenessUpdate(awareness, new Uint8Array(update), 'server');
+//       });
 
-      socket.on('user-left', ({ userId }) => {
-        if (!cancelled) {
-          onPeersChange?.(prev =>
-            Array.isArray(prev) ? prev.filter(p => p.userId !== userId) : prev
-          );
-        }
-      });
+//       socket.on('user-left', ({ userId }) => {
+//         if (!cancelled) {
+//           onPeersChange?.(prev =>
+//             Array.isArray(prev) ? prev.filter(p => p.userId !== userId) : prev
+//           );
+//         }
+//       });
 
-      /* Broadcast our own Yjs updates */
-      ydoc.on('update', (update, origin) => {
-        if (origin === 'remote') return;
-        socket.emit('sync-update', { docId, update: Array.from(update) });
-        if (onUpdate) onUpdate(ydoc.getText('content').toString());
-      });
+//       /* Broadcast our own Yjs updates */
+//       ydoc.on('update', (update, origin) => {
+//         if (origin === 'remote') return;
+//         socket.emit('sync-update', { docId, update: Array.from(update) });
+//         if (onUpdate) onUpdate(ydoc.getText('content').toString());
+//       });
 
-      /* Broadcast our awareness on every change */
-      awareness.on('change', () => {
-        const update = encodeAwarenessUpdate(awareness, Array.from(awareness.getStates().keys()));
-        socket.emit('awareness-update', { docId, update: Array.from(update) });
+//       /* Broadcast our awareness on every change */
+//       awareness.on('change', () => {
+//         const update = encodeAwarenessUpdate(awareness, Array.from(awareness.getStates().keys()));
+//         socket.emit('awareness-update', { docId, update: Array.from(update) });
 
-        /* Rebuild peer list — exclude ourselves */
-        const peers = [];
-        awareness.getStates().forEach((state, clientId) => {
-          if (clientId !== awareness.clientID && state.user) peers.push(state.user);
-        });
-        if (!cancelled) onPeersChange?.(peers);
-      });
-    }
+//         /* Rebuild peer list — exclude ourselves */
+//         const peers = [];
+//         awareness.getStates().forEach((state, clientId) => {
+//           if (clientId !== awareness.clientID && state.user) peers.push(state.user);
+//         });
+//         if (!cancelled) onPeersChange?.(peers);
+//       });
+//     }
 
-    init().catch(err => console.warn('Yjs init error:', err));
+//     init().catch(err => console.warn('Yjs init error:', err));
 
-    return () => {
-      cancelled = true;
-      bindingRef.current?.destroy();
-      awarenessRef.current?.destroy();
-      socketRef.current?.disconnect();
-      ydocRef.current?.destroy();
-    };
-  }, [docId, user?.id]);
+//     return () => {
+//       cancelled = true;
+//       bindingRef.current?.destroy();
+//       awarenessRef.current?.destroy();
+//       socketRef.current?.disconnect();
+//       ydocRef.current?.destroy();
+//     };
+//   }, [docId, user?.id]);
 
-  return { ydocRef, awarenessRef, bindingRef };
-}
+//   return { ydocRef, awarenessRef, bindingRef };
+// }
 
 /* ─────────────────────────────────────────────────────────────────────
    PRESENCE CHIPS
 ───────────────────────────────────────────────────────────────────── */
-function PresenceChips({ peers, currentUser }) {
-  const all = [
-    { name: currentUser?.username, color: avatarColor(currentUser?.username ?? ''), self: true },
-    ...peers,
-  ].filter(p => p.name);
+// function PresenceChips({ peers, currentUser }) {
+//   const all = [
+//     { name: currentUser?.username, color: avatarColor(currentUser?.username ?? ''), self: true },
+//     ...peers,
+//   ].filter(p => p.name);
 
-  if (all.length === 0) return null;
+//   if (all.length === 0) return null;
 
-  return (
-    <div className={styles.presence} aria-label="People in this session">
-      {all.slice(0, 5).map((p, i) => (
-        <div
-          key={p.userId || i}
-          className={styles.presence_chip}
-          style={{ '--pc': p.color || '#3B82F6' }}
-          title={p.self ? `${p.name} (you)` : p.name}
-        >
-          <span className={styles.presence_initial} aria-hidden="true">
-            {p.name[0].toUpperCase()}
-          </span>
-          {i < 2 && (
-            <span className={styles.presence_name}>
-              {p.self ? 'You' : p.name}
-            </span>
-          )}
-        </div>
-      ))}
-      {all.length > 5 && (
-        <span className={styles.presence_overflow}>+{all.length - 5}</span>
-      )}
-    </div>
-  );
-}
+//   return (
+//     <div className={styles.presence} aria-label="People in this session">
+//       {all.slice(0, 5).map((p, i) => (
+//         <div
+//           key={p.userId || i}
+//           className={styles.presence_chip}
+//           style={{ '--pc': p.color || '#3B82F6' }}
+//           title={p.self ? `${p.name} (you)` : p.name}
+//         >
+//           <span className={styles.presence_initial} aria-hidden="true">
+//             {p.name[0].toUpperCase()}
+//           </span>
+//           {i < 2 && (
+//             <span className={styles.presence_name}>
+//               {p.self ? 'You' : p.name}
+//             </span>
+//           )}
+//         </div>
+//       ))}
+//       {all.length > 5 && (
+//         <span className={styles.presence_overflow}>+{all.length - 5}</span>
+//       )}
+//     </div>
+//   );
+// }
 
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -358,7 +361,6 @@ export default function Editor() {
   const [docError,   setDocError]   = useState('');
 
   const [peers,      setPeers]      = useState([]);
-  const [connected,  setConnected]  = useState(false);
 
   useEffect(() => {
   setPeers([
@@ -368,8 +370,8 @@ export default function Editor() {
   ]);
 }, []);
 
-  const [aiMessages, setAiMessages] = useState([]);
-  const [aiLoading,  setAiLoading]  = useState(false);
+  // const [aiMessages, setAiMessages] = useState([]);
+  // const [aiLoading,  setAiLoading]  = useState(false);
 
   const [output,     setOutput]     = useState(null);
   const [running,    setRunning]    = useState(false);
@@ -408,14 +410,15 @@ export default function Editor() {
   }, [user?.username]);
 
   /* Yjs + Socket.io */
-  const { ydocRef, awarenessRef, bindingRef } = useYjs({
-    docId,
-    user,
-    onUpdate:        handleEditorUpdate,
-    onPeersChange:   setPeers,
-    onConnectChange: setConnected,
-  });
+const { ydocRef, awarenessRef, bindingRef, connected, getText, replaceText } = useYjs({
+  docId,
+  user,
+  onUpdate:      handleEditorUpdate,
+  onPeersChange: setPeers,
+});
 
+const { messages: aiMessages, loading: aiLoading, send: sendAI,
+        clearHistory: clearAIHistory, contextNote } = useAI({ peers });
   /* Monaco mount */
   const handleEditorMount = useCallback(async (editor, monaco) => {
     editorRef.current = editor;
@@ -508,103 +511,110 @@ export default function Editor() {
     }
   }
 
-  async function handleSaveSnapshot(label) {
-    setSavingSnapshot(true);
-    try {
-      const { data } = await api.post(`/documents/${docId}/snapshots`, {
-        label,
-        content: editorRef.current.getValue(),
-        language: doc?.language,
-      });
-      setSnapshots(prev => [data, ...prev]);
-    } finally {
-      setSavingSnapshot(false);
-    }
+async function handleSaveSnapshot(label) {
+  setSavingSnapshot(true);
+  try {
+    const { data } = await api.post(`/documents/${docId}/snapshots`, {
+      label,
+      content: getText(),              // ← was editorRef.current.getValue()
+      language: doc?.language,
+    });
+    setSnapshots(prev => [data, ...prev]);
+  } finally {
+    setSavingSnapshot(false);
   }
+}
 
-  async function handleRestoreSnapshot(snapshot) {
-    setRestoringId(snapshot.id);
-    try {
-      const ytext = ydocRef.current.getText('content');
-      ydocRef.current.transact(() => {
-        ytext.delete(0, ytext.length);
-        ytext.insert(0, snapshot.content);
-      });
-    } finally {
-      setRestoringId(null);
-      setShowSnapshots(false);
-    }
+async function handleRestoreSnapshot(snapshot) {
+  setRestoringId(snapshot.id);
+  try {
+    replaceText(snapshot.content);     // ← was the manual ydoc.transact block
+  } finally {
+    setRestoringId(null);
+    setShowSnapshots(false);
   }
+}
 
   /* Send message to AI pair programmer */
-  async function handleAISend(question) {
-    if (!question.trim() || aiLoading) return;
+  // async function handleAISend(question) {
+  //   if (!question.trim() || aiLoading) return;
 
-    const code     = editorRef.current?.getValue() ?? '';
-    const language = doc?.language ?? 'javascript';
+  //   const code     = editorRef.current?.getValue() ?? '';
+  //   const language = doc?.language ?? 'javascript';
 
-    const userMsg = { id: Date.now(),     role: 'user',      content: question, username: user?.username };
-    const aiMsgId = Date.now() + 1;
-    const aiMsg   = { id: aiMsgId, role: 'assistant', content: '', streaming: true };
+  //   const userMsg = { id: Date.now(),     role: 'user',      content: question, username: user?.username };
+  //   const aiMsgId = Date.now() + 1;
+  //   const aiMsg   = { id: aiMsgId, role: 'assistant', content: '', streaming: true };
 
-    setAiMessages(prev => [...prev, userMsg, aiMsg]);
-    setAiLoading(true);
+  //   setAiMessages(prev => [...prev, userMsg, aiMsg]);
+  //   setAiLoading(true);
 
-    try {
-      const token    = localStorage.getItem('cg_token');
-      const response = await fetch('/api/ai/ask', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body:    JSON.stringify({
-          question, code, language,
-          editLog:    editLogRef.current.slice(-20),
-          peers:      peers.map(p => p.name),
-          lastOutput: output
-            ? { stdout: output.stdout?.slice(0, 500), stderr: output.stderr?.slice(0, 500) }
-            : null,
-        }),
-      });
+  //   try {
+  //     const token    = localStorage.getItem('cg_token');
+  //     const response = await fetch('/api/ai/ask', {
+  //       method:  'POST',
+  //       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+  //       body:    JSON.stringify({
+  //         question, code, language,
+  //         editLog:    editLogRef.current.slice(-20),
+  //         peers:      peers.map(p => p.name),
+  //         lastOutput: output
+  //           ? { stdout: output.stdout?.slice(0, 500), stderr: output.stderr?.slice(0, 500) }
+  //           : null,
+  //       }),
+  //     });
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  //     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const reader  = response.body.getReader();
-      const decoder = new TextDecoder();
-      let   buffer  = '';
+  //     const reader  = response.body.getReader();
+  //     const decoder = new TextDecoder();
+  //     let   buffer  = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+  //     while (true) {
+  //       const { done, value } = await reader.read();
+  //       if (done) break;
+  //       buffer += decoder.decode(value, { stream: true });
+  //       const lines = buffer.split('\n');
+  //       buffer = lines.pop() ?? '';
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const chunk = line.slice(6);
-          if (chunk === '[DONE]') continue;
-          setAiMessages(prev => prev.map(m =>
-            m.id === aiMsgId ? { ...m, content: m.content + chunk } : m
-          ));
-        }
-      }
+  //       for (const line of lines) {
+  //         if (!line.startsWith('data: ')) continue;
+  //         const chunk = line.slice(6);
+  //         if (chunk === '[DONE]') continue;
+  //         setAiMessages(prev => prev.map(m =>
+  //           m.id === aiMsgId ? { ...m, content: m.content + chunk } : m
+  //         ));
+  //       }
+  //     }
 
-    } catch {
-      setAiMessages(prev => prev.map(m =>
-        m.id === aiMsgId ? { ...m, content: 'Something went wrong. Please try again.', streaming: false } : m
-      ));
-    } finally {
-      setAiMessages(prev => prev.map(m =>
-        m.id === aiMsgId ? { ...m, streaming: false } : m
-      ));
-      setAiLoading(false);
-    }
-  }
-
-  const contextNote = useMemo(() => {
-    if (peers.length === 0) return 'Watching your edits';
-    if (peers.length === 1) return `Watching you and ${peers[0].name}`;
-    return `Watching ${peers.length + 1} people`;
-  }, [peers]);
+  //   } catch {
+  //     setAiMessages(prev => prev.map(m =>
+  //       m.id === aiMsgId ? { ...m, content: 'Something went wrong. Please try again.', streaming: false } : m
+  //     ));
+  //   } finally {
+  //     setAiMessages(prev => prev.map(m =>
+  //       m.id === aiMsgId ? { ...m, streaming: false } : m
+  //     ));
+  //     setAiLoading(false);
+  //   }
+  // }
+function handleAISend(question) {
+  sendAI(question, {
+    code:       editorRef.current?.getValue() ?? '',
+    language:   doc?.language ?? 'javascript',
+    editLog:    editLogRef.current.slice(-20),
+    peers,
+    lastOutput: output
+      ? { stdout: output.stdout?.slice(0, 500), stderr: output.stderr?.slice(0, 500) }
+      : null,
+    username:   user?.username,
+  });
+}
+  // const contextNote = useMemo(() => {
+  //   if (peers.length === 0) return 'Watching your edits';
+  //   if (peers.length === 1) return `Watching you and ${peers[0].name}`;
+  //   return `Watching ${peers.length + 1} people`;
+  // }, [peers]);
 
   /* Error page */
   if (docError) {
@@ -624,94 +634,91 @@ export default function Editor() {
 
   /* Main render */
   return (
-    <div className={styles.root}>
+  <div className={styles.root}>
 
-      {/* ── Top bar ── */}
-      <header className={styles.topbar}>
+    <Navbar
+      title={doc?.title}
+      onTitleChange={async (newTitle) => {
+        const { data } = await api.patch(`/documents/${docId}`, { title: newTitle });
+        setDoc(d => ({ ...d, title: data.title }));
+      }}
+      docLoading={docLoading}
+      language={doc?.language}
+      onLanguageChange={async (newLang) => {
+        const { data } = await api.patch(`/documents/${docId}`, { language: newLang });
+        setDoc(d => ({ ...d, language: data.language ?? newLang }));
+      }}
+      connected={connected}
+      currentUser={user}
+      peers={peers}
+      onOpenSnapshots={() => { setShowSnapshots(true); loadSnapshots(); }}
+      onRunClick={handleRun}
+      running={running}
+      runDisabled={docLoading}
+    />
 
-        <div className={styles.topbar_left}>
-          <Link to="/dashboard" className={styles.back_btn} aria-label="Back to dashboard">
-            <BackIcon />
-          </Link>
+    {/* ── Body: editor + right panel ── */}
+    <div className={styles.body}>
 
-          <Link to="/" className={styles.topbar_logo} aria-label="Code Ground">
-            <span className={styles.logo_bracket}>&lt;</span>
-            <span className={styles.logo_letters}>CG</span>
-            <span className={styles.logo_bracket}>/&gt;</span>
-          </Link>
+      {/* Monaco editor */}
+      <div className={styles.editor_wrap}>
+        <MonacoEditor
+          height="100%"
+          language={doc?.language ?? 'javascript'}
+          theme="codeground"
+          onMount={handleEditorMount}
+          loading={
+            <div className={styles.editor_loading}>
+              <Spinner size={20} />
+              <span>Loading editor…</span>
+            </div>
+          }
+          options={{
+            fontSize:                   14,
+            fontFamily:                 "'JetBrains Mono', monospace",
+            fontLigatures:              true,
+            lineHeight:                 1.8,
+            letterSpacing:              0.3,
+            minimap:                    { enabled: false },
+            scrollBeyondLastLine:        false,
+            smoothScrolling:             true,
+            cursorBlinking:              'phase',
+            cursorSmoothCaretAnimation: 'on',
+            padding:                    { top: 20, bottom: 20 },
+            wordWrap:                   'on',
+            tabSize:                    2,
+            renderLineHighlight:        'line',
+            bracketPairColorization:    { enabled: true },
+            formatOnPaste:              true,
+            suggestOnTriggerCharacters: true,
+            scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
+          }}
+        />
+      </div>
 
-          <span className={styles.topbar_sep} aria-hidden="true">/</span>
+      {/* Right panel */}
+      <div className={styles.right_panel}>
+        <AISidebar
+  messages={aiMessages}
+  loading={aiLoading}
+  onSend={handleAISend}
+  onClear={clearAIHistory}
+  contextNote={contextNote}
+  currentUser={user}
+/>
+        <OutputPanel
+          output={output}
+          running={running}
+          open={outputOpen}
+          onToggle={() => setOutputOpen(o => !o)}
+          onClear={() => setOutput(null)}
+        />
+      </div>
 
-          {/* Inline-editable title */}
-          {editingTitle ? (
-            <input
-              className={styles.title_input}
-              value={titleVal}
-              onChange={e => setTitleVal(e.target.value)}
-              onBlur={saveTitle}
-              onKeyDown={e => {
-                if (e.key === 'Enter')  saveTitle();
-                if (e.key === 'Escape') { setTitleVal(doc?.title ?? ''); setEditingTitle(false); }
-              }}
-              maxLength={80}
-              autoFocus
-              aria-label="Document title"
-            />
-          ) : (
-            <button
-              className={styles.title_btn}
-              onClick={() => setEditingTitle(true)}
-              title="Click to rename"
-              aria-label={`Title: ${doc?.title ?? '…'}. Click to rename.`}
-            >
-              {docLoading ? '…' : (doc?.title ?? 'Untitled')}
-            </button>
-          )}
+    </div>
 
-          {doc?.language && (
-            <span className={styles.lang_badge} style={{ '--lc': LANG_COLOR[doc.language] ?? '#64748B' }}>
-              <span className={styles.lang_badge_dot} aria-hidden="true" />
-              {LANG_LABEL[doc.language] ?? doc.language}
-            </span>
-          )}
-        </div>
-
-        <div className={styles.topbar_centre}>
-          <Presence currentUser={user} peers={peers} maxVisible={4} />
-        </div>
-
-        <div className={styles.topbar_right}>
-          <div
-            className={`${styles.conn_dot} ${connected ? styles.conn_on : styles.conn_off}`}
-            title={connected ? 'Connected' : 'Disconnected'}
-            aria-label={connected ? 'Connected' : 'Disconnected'}
-          />
-
-            {/* ADD THIS — snapshots trigger, before the run button */}
-  <button
-    className={styles.run_btn}
-    onClick={() => { setShowSnapshots(true); loadSnapshots(); }}
-    aria-label="Open snapshots panel"
-  >
-    📸 Snapshots
-  </button>
-
-  <button
-    className={`${styles.run_btn} ${running ? styles.run_btn_running : ''}`}
-    onClick={handleRun}
-    disabled={running || docLoading}
-    aria-busy={running}
-    aria-label={running ? 'Running…' : 'Run code'}
-  >
-    {running ? <><StopIcon /> Running…</> : <><PlayIcon /> Run</>}
-  </button>
-
-        </div>
-      </header>
-
-      {/* ── Body: editor + right panel ── */}
-      <div className={styles.body}>
-<SnapshotDrawer
+    {/* Snapshots drawer — fixed-positioned, sits anywhere in the tree */}
+    <SnapshotDrawer
       open={showSnapshots}
       onClose={() => setShowSnapshots(false)}
       snapshots={snapshots}
@@ -721,62 +728,7 @@ export default function Editor() {
       onRestore={handleRestoreSnapshot}
       restoringId={restoringId}
     />
-        {/* Monaco editor */}
-        <div className={styles.editor_wrap}>
-          <MonacoEditor
-            height="100%"
-            language={doc?.language ?? 'javascript'}
-            theme="codeground"
-            onMount={handleEditorMount}
-            loading={
-              <div className={styles.editor_loading}>
-                <Spinner size={20} />
-                <span>Loading editor…</span>
-              </div>
-            }
-            options={{
-              fontSize:                   14,
-              fontFamily:                 "'JetBrains Mono', monospace",
-              fontLigatures:              true,
-              lineHeight:                 1.8,
-              letterSpacing:              0.3,
-              minimap:                    { enabled: false },
-              scrollBeyondLastLine:        false,
-              smoothScrolling:             true,
-              cursorBlinking:              'phase',
-              cursorSmoothCaretAnimation: 'on',
-              padding:                    { top: 20, bottom: 20 },
-              wordWrap:                   'on',
-              tabSize:                    2,
-              renderLineHighlight:        'line',
-              bracketPairColorization:    { enabled: true },
-              formatOnPaste:              true,
-              suggestOnTriggerCharacters: true,
-              scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
-            }}
-          />
-        </div>
 
-        {/* Right panel */}
-        <div className={styles.right_panel}>
-          <AISidebar
-            messages={aiMessages}
-            loading={aiLoading}
-            onSend={handleAISend}
-            onClear={() => setAiMessages([])}
-            contextNote={contextNote}
-            currentUser={user}
-          />
-          <OutputPanel
-  output={output}
-  running={running}
-  open={outputOpen}
-  onToggle={() => setOutputOpen(o => !o)}
-  onClear={() => setOutput(null)}
-/>
-        </div>
-
-      </div>
-    </div>
-  );
+  </div>
+);
 }
