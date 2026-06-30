@@ -69,6 +69,7 @@ import Navbar from '../components/Navbar.jsx';
 import { useYjs } from '../hooks/useYjs.js';
 import { useAI } from '../hooks/useAI.js';
 import { useExecution } from '../hooks/useExecution.js';
+import buildContext from "../utils/contextBuilder";
 
 /* ─────────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -449,6 +450,21 @@ async function handleRestoreSnapshot(snapshot) {
   //   }
   // }
 function handleAISend(question) {
+  const context = buildContext({
+    documentId: doc?.id,
+    title: doc?.title,
+    language: doc?.language,
+    code: editorRef.current?.getValue() ?? "",
+    prompt: question,
+    collaborators: peers,
+    timeline: editLogRef.current,
+    execution: output,
+    sessionSummary: null,
+  });
+
+  console.log("AI Context:");
+  console.log(context);
+
   sendAI(question, {
     code:       editorRef.current?.getValue() ?? '',
     language:   doc?.language ?? 'javascript',
