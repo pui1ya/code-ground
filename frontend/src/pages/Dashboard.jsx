@@ -414,9 +414,9 @@ function DocCard({ doc, onOpen, onDelete, isDeleting }) {
       <div className={styles.card_meta}>
         <span className={styles.meta_item}>
           <ClockIcon />
-          {relativeTime(doc.updated_at)}
+          {relativeTime(doc.updatedAt)}
         </span>
-        {doc.member_count > 0 && (
+        {(doc.member_count ?? 0) > 0 && (
           <span className={styles.meta_item}>
             <UsersIcon />
             {doc.member_count} {doc.member_count === 1 ? 'collaborator' : 'collaborators'}

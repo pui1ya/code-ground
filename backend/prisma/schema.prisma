@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id String @id @default(cuid())
+
+  username String @unique
+
+  email String @unique
+
+  password String
+
+  documents   Document[]
+  activities  Activity[]
+  memberships DocumentMember[]
+
+  createdAt DateTime @default(now())
+
+  updatedAt DateTime @updatedAt
+}
+
+model Document {
+  id String @id @default(cuid())
+
+  title String
+
+  language String
+
+  content String @default("")
+
+  ownerId String
+
+  owner      User             @relation(fields: [ownerId], references: [id])
+  activities Activity[]
+  members    DocumentMember[]
+
+  createdAt DateTime @default(now())
+
+  updatedAt DateTime @updatedAt
+}
+
+model DocumentMember {
+  id String @id @default(cuid())
+
+  documentId String
+  userId     String
+
+  role String @default("editor")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([documentId, userId])
+}
+
+model Invitation {
+  id String @id @default(cuid())
+
+  documentId String
+
+  email String
+
+  invitedBy String
+
+  status String @default("pending")
+
+  createdAt DateTime @default(now())
+}
+
+model Activity {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id])
+
+  type String
+
+  description String
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+}

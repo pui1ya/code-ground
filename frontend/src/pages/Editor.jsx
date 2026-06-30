@@ -322,7 +322,11 @@ const { messages: aiMessages, loading: aiLoading, send: sendAI,
     const newTitle = titleVal.trim();
     if (!newTitle || newTitle === doc?.title) return;
     try {
-      const { data } = await api.patch(`/documents/${docId}`, { title: newTitle });
+      const { data } = await api.put(`/documents/${docId}`, {
+    title: newTitle,
+    language: doc.language,
+    content: getText(),
+});
       setDoc(d => ({ ...d, title: data.title }));
     } catch { setTitleVal(doc?.title ?? ''); }
   }
@@ -486,7 +490,7 @@ function handleAISend(question) {
   return (
   <div className={styles.root}>
 
-    <Navbar
+    <Navbar 
       title={doc?.title}
       onTitleChange={async (newTitle) => {
         const { data } = await api.patch(`/documents/${docId}`, { title: newTitle });
@@ -495,7 +499,11 @@ function handleAISend(question) {
       docLoading={docLoading}
       language={doc?.language}
       onLanguageChange={async (newLang) => {
-        const { data } = await api.patch(`/documents/${docId}`, { language: newLang });
+        const { data } = await api.put(`/documents/${docId}`, {
+    title: doc.title,
+    language: newLang,
+    content: getText(),
+});
         setDoc(d => ({ ...d, language: data.language ?? newLang }));
       }}
       connected={connected}
@@ -505,6 +513,7 @@ function handleAISend(question) {
       onRunClick={handleRun}
       running={running}
       runDisabled={docLoading}
+      documentId={docId}
     />
 
     {/* ── Body: editor + right panel ── */}

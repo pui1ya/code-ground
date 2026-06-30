@@ -73,7 +73,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Presence from './Presence.jsx';
 import styles    from './Navbar.module.css';
-
+import InviteModal from "./InviteModal";
 /* ─────────────────────────────────────────────────────────────────────
    LANGUAGE DATA — same set used across Dashboard's NewDocModal,
    kept in sync so the language list looks identical everywhere.
@@ -322,7 +322,9 @@ export default function Navbar({
   onRunClick,
   running         = false,
   runDisabled     = false,
+  documentId,
 }) {
+  const [inviteOpen, setInviteOpen] = useState(false);
   return (
     <header className={styles.topbar}>
 
@@ -381,6 +383,13 @@ export default function Navbar({
           </button>
         )}
 
+<button
+    className={styles.snapshots_btn}
+    onClick={() => setInviteOpen(true)}
+>
+    Invite
+</button>
+
         <button
           className={`${styles.run_btn} ${running ? styles.run_btn_running : ''}`}
           onClick={onRunClick}
@@ -396,6 +405,13 @@ export default function Navbar({
         </button>
 
       </div>
+
+      <InviteModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        documentId={documentId}
+      />
+      
     </header>
   );
 }
