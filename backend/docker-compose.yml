@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  backend:
+    build: .
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./:/usr/src/app
+  redis:
+    image: redis:7
+    ports:
+      - '6379:6379'
+  mongo:
+    image: mongo:6
+    ports:
+      - '27017:27017'
